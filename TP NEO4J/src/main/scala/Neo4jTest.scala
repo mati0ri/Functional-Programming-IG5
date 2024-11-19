@@ -1,5 +1,7 @@
 package fr.umontpellier.ig5
+
 import org.apache.spark.sql.{SaveMode, SparkSession}
+import org.apache.spark.sql.functions._
 
 object Neo4jTest {
   def main(args: Array[String]): Unit = {
@@ -7,7 +9,7 @@ object Neo4jTest {
     val url = "neo4j://localhost:7687"
     val username = "neo4j"
     val password = "Mateo3945"
-    val dbname = "fp1"
+    val dbname = "Project_DB"
 
     val spark = SparkSession.builder
       .config("neo4j.url", url)
@@ -18,22 +20,34 @@ object Neo4jTest {
       .master("local[*]")
       .getOrCreate()
 
-    val data = spark.read.json("data/example.jsonl")
+    // Charger les données JSON initiales
+    val rawData = spark.read.json("data/nvdcve-1.1-2023.jsonl")
 
-    // Write to Neo4j
-    data.write
+    // Transformer les données pour extraire description et ImpactScore
+    val transformedData = rawData
+      .select(explode(col("CVE_Items")).as("cveItem")) // Éclater CVE_Items en lignes individuelles
+      .select(
+        col("cveItem.cve.description.description_data")(0)("value").as("description"), // Extraire description
+        col("cveItem.impact.baseMetricV3.impactScore").as("ImpactScore") // Extraire ImpactScore
+      )
+      .filter(col("ImpactScore").isNotNull) // Filtrer les entrées où ImpactScore est non nul
+
+    // Écrire les données transformées dans Neo4j
+    transformedData.write
       .format("org.neo4j.spark.DataSource")
       .mode(SaveMode.Overwrite)
-      .option("labels", "Person")
-      .option("node.keys", "name,surname")
+      .option("labels", "CVE") // Définir le label pour les nœuds
+      .option("node.keys", "description") // Définir la clé unique pour chaque nœud
       .save()
 
-    // Read from Neo4j
+    println("Les données ont été écrites avec succès dans Neo4j.")
+
+    // Lire les données depuis Neo4j pour vérification
     val ds = spark.read
       .format("org.neo4j.spark.DataSource")
-      .option("labels", "Person")
+      .option("labels", "CVE") // Lire les nœuds avec le label CVE
       .load()
 
-    ds.show()
+    ds.show(false) // Afficher les données récupérées
   }
 }
